@@ -1,23 +1,15 @@
-import { colorize, isRich as isRichTerminal, theme } from "../../terminal/theme.js";
+/** Formatting helpers for model-list terminal tables. */
+import { isRich as isRichTerminal, theme } from "../../../packages/terminal-core/src/theme.js";
+export { maskApiKey } from "../../utils/mask-api-key.js";
 
+/** Enables rich formatting only for non-machine-readable output. */
 export const isRich = (opts?: { json?: boolean; plain?: boolean }) =>
-  Boolean(isRichTerminal() && !opts?.json && !opts?.plain);
+  isRichTerminal() && !opts?.json && !opts?.plain;
 
+/** Pads a table cell to a fixed width. */
 export const pad = (value: string, size: number) => value.padEnd(size);
 
-export const formatKey = (key: string, rich: boolean) => colorize(rich, theme.warn, key);
-
-export const formatValue = (value: string, rich: boolean) => colorize(rich, theme.info, value);
-
-export const formatKeyValue = (
-  key: string,
-  value: string,
-  rich: boolean,
-  valueColor: (value: string) => string = theme.info,
-) => `${formatKey(key, rich)}=${colorize(rich, valueColor, value)}`;
-
-export const formatSeparator = (rich: boolean) => colorize(rich, theme.muted, " | ");
-
+/** Applies terminal color based on a model-list tag. */
 export const formatTag = (tag: string, rich: boolean) => {
   if (!rich) {
     return tag;
@@ -46,6 +38,7 @@ export const formatTag = (tag: string, rich: boolean) => {
   return theme.muted(tag);
 };
 
+/** Truncates model-list cells with an ASCII ellipsis. */
 export const truncate = (value: string, max: number) => {
   if (value.length <= max) {
     return value;
@@ -54,15 +47,4 @@ export const truncate = (value: string, max: number) => {
     return value.slice(0, max);
   }
   return `${value.slice(0, max - 3)}...`;
-};
-
-export const maskApiKey = (value: string): string => {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "missing";
-  }
-  if (trimmed.length <= 16) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, 8)}...${trimmed.slice(-8)}`;
 };

@@ -1,5 +1,6 @@
-import type { Component, SelectItem } from "@mariozechner/pi-tui";
+// Launches and manages the local shell process used by TUI local mode.
 import { spawn } from "node:child_process";
+import type { Component, SelectItem } from "@earendil-works/pi-tui";
 import { createSearchableSelectList } from "./components/selectors.js";
 
 type LocalShellDeps = {
@@ -100,20 +101,27 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
     deps.chatLog.addSystem(`[local] $ ${cmd}`);
     deps.tui.requestRender();
 
+    const appendWithCap = (text: string, chunk: string) => {
+      const combined = text + chunk;
+      return combined.length > maxChars ? combined.slice(-maxChars) : combined;
+    };
+
     await new Promise<void>((resolve) => {
       const child = spawnCommand(cmd, {
+        // Intentionally a shell: this is an operator-only local TUI feature (prefixed with `!`)
+        // and is gated behind an explicit in-session approval prompt.
         shell: true,
         cwd: getCwd(),
-        env,
+        env: { ...env, OPENCLAW_SHELL: "tui-local" },
       });
 
       let stdout = "";
       let stderr = "";
       child.stdout.on("data", (buf) => {
-        stdout += buf.toString("utf8");
+        stdout = appendWithCap(stdout, buf.toString("utf8"));
       });
       child.stderr.on("data", (buf) => {
-        stderr += buf.toString("utf8");
+        stderr = appendWithCap(stderr, buf.toString("utf8"));
       });
 
       child.on("close", (code, signal) => {
@@ -122,13 +130,11 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
           .trimEnd();
 
         if (combined) {
-          for (const line of combined.split("\n")) {
-            deps.chatLog.addSystem(`[local] ${line}`);
+          for (const lineLocal of combined.split("\n")) {
+            deps.chatLog.addSystem(`[local] ${lineLocal}`);
           }
         }
-        deps.chatLog.addSystem(
-          `[local] exit ${code ?? "?"}${signal ? ` (signal ${String(signal)})` : ""}`,
-        );
+        deps.chatLog.addSystem(`[local] exit ${code ?? "?"}${signal ? ` (signal ${signal})` : ""}`);
         deps.tui.requestRender();
         resolve();
       });

@@ -1,6 +1,7 @@
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
+// Chutes OAuth login flow with loopback callback handling and manual paste fallback.
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChutesOAuthAppConfig } from "../agents/chutes-oauth.js";
 import {
   CHUTES_AUTHORIZE_ENDPOINT,
@@ -8,11 +9,41 @@ import {
   generateChutesPkce,
   parseOAuthCallbackInput,
 } from "../agents/chutes-oauth.js";
+import { isLoopbackHost } from "../gateway/net.js";
+import type { OAuthCredentials } from "../llm/oauth.js";
 
 type OAuthPrompt = {
   message: string;
   placeholder?: string;
 };
+
+function parseManualOAuthInput(
+  input: string,
+  expectedState: string,
+): { code: string; state: string } {
+  const trimmed = normalizeOptionalString(input ?? "") ?? "";
+  if (!trimmed) {
+    throw new Error("Missing OAuth redirect URL or authorization code.");
+  }
+
+  // Support pasting either:
+  // - Full redirect URL (preferred; validates state)
+  // - Raw authorization code (legacy/manual copy flows)
+  const looksLikeRedirect =
+    /^https?:\/\//i.test(trimmed) || trimmed.includes("://") || trimmed.includes("?");
+  if (!looksLikeRedirect) {
+    return { code: trimmed, state: expectedState };
+  }
+
+  const parsed = parseOAuthCallbackInput(trimmed, expectedState);
+  if ("error" in parsed) {
+    throw new Error(parsed.error);
+  }
+  if (parsed.state !== expectedState) {
+    throw new Error("Invalid OAuth state");
+  }
+  return parsed;
+}
 
 function buildAuthorizeUrl(params: {
   clientId: string;
@@ -44,6 +75,11 @@ async function waitForLocalCallback(params: {
     throw new Error(`Chutes OAuth redirect URI must be http:// (got ${params.redirectUri})`);
   }
   const hostname = redirectUrl.hostname || "127.0.0.1";
+  if (!isLoopbackHost(hostname)) {
+    throw new Error(
+      `Chutes OAuth redirect hostname must be loopback (got ${hostname}). Use http://127.0.0.1:<port>/...`,
+    );
+  }
   const port = redirectUrl.port ? Number.parseInt(redirectUrl.port, 10) : 80;
   const expectedPath = redirectUrl.pathname || "/";
 
@@ -95,7 +131,7 @@ async function waitForLocalCallback(params: {
           clearTimeout(timeout);
         }
         server.close();
-        reject(err);
+        reject(toLintErrorObject(err, "Non-Error rejection"));
       }
     });
 
@@ -119,6 +155,7 @@ async function waitForLocalCallback(params: {
   });
 }
 
+/** Run a PKCE OAuth login for Chutes and exchange the resulting code for credentials. */
 export async function loginChutes(params: {
   app: ChutesOAuthAppConfig;
   manual?: boolean;
@@ -153,14 +190,7 @@ export async function loginChutes(params: {
       message: "Paste the redirect URL (or authorization code)",
       placeholder: `${params.app.redirectUri}?code=...&state=...`,
     });
-    const parsed = parseOAuthCallbackInput(String(input), state);
-    if ("error" in parsed) {
-      throw new Error(parsed.error);
-    }
-    if (parsed.state !== state) {
-      throw new Error("Invalid OAuth state");
-    }
-    codeAndState = parsed;
+    codeAndState = parseManualOAuthInput(input, state);
   } else {
     const callback = waitForLocalCallback({
       redirectUri: params.app.redirectUri,
@@ -173,14 +203,7 @@ export async function loginChutes(params: {
         message: "Paste the redirect URL (or authorization code)",
         placeholder: `${params.app.redirectUri}?code=...&state=...`,
       });
-      const parsed = parseOAuthCallbackInput(String(input), state);
-      if ("error" in parsed) {
-        throw new Error(parsed.error);
-      }
-      if (parsed.state !== state) {
-        throw new Error("Invalid OAuth state");
-      }
-      return parsed;
+      return parseManualOAuthInput(input, state);
     });
 
     await params.onAuth({ url });
@@ -194,4 +217,18 @@ export async function loginChutes(params: {
     codeVerifier: verifier,
     fetchFn: params.fetchFn,
   });
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

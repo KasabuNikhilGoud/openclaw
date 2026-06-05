@@ -1,3 +1,11 @@
+/**
+ * web_fetch extraction utilities.
+ *
+ * Converts lightweight HTML into bounded markdown/text without pulling in a full renderer.
+ */
+import { sanitizeHtml, stripInvisibleUnicode } from "./web-fetch-visibility.js";
+
+/** Output mode requested by web_fetch extraction. */
 export type ExtractMode = "markdown" | "text";
 
 function decodeEntities(value: string): string {
@@ -16,7 +24,8 @@ function stripTags(value: string): string {
   return decodeEntities(value.replace(/<[^>]+>/g, ""));
 }
 
-function normalizeWhitespace(value: string): string {
+/** Collapses display whitespace while preserving paragraph breaks. */
+export function normalizeWhitespace(value: string): string {
   return value
     .replace(/\r/g, "")
     .replace(/[ \t]+\n/g, "\n")
@@ -25,6 +34,7 @@ function normalizeWhitespace(value: string): string {
     .trim();
 }
 
+/** Converts sanitized HTML into coarse markdown plus an optional title. */
 export function htmlToMarkdown(html: string): { text: string; title?: string } {
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const title = titleMatch ? normalizeWhitespace(stripTags(titleMatch[1])) : undefined;
@@ -37,6 +47,7 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
     if (!label) {
       return href;
     }
+    // Preserve link targets in markdown mode so fetched pages remain source-auditable.
     return `[${label}](${href})`;
   });
   text = text.replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi, (_, level, body) => {
@@ -56,6 +67,7 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
   return { text, title };
 }
 
+/** Removes markdown decoration for plain text extraction. */
 export function markdownToText(markdown: string): string {
   let text = markdown;
   text = text.replace(/!\[[^\]]*]\([^)]+\)/g, "");
@@ -70,6 +82,7 @@ export function markdownToText(markdown: string): string {
   return normalizeWhitespace(text);
 }
 
+/** Truncates text by characters and reports whether truncation occurred. */
 export function truncateText(
   value: string,
   maxChars: number,
@@ -80,43 +93,19 @@ export function truncateText(
   return { text: value.slice(0, maxChars), truncated: true };
 }
 
-export async function extractReadableContent(params: {
+/** Sanitizes HTML and extracts either markdown or plain text content. */
+export async function extractBasicHtmlContent(params: {
   html: string;
-  url: string;
   extractMode: ExtractMode;
 }): Promise<{ text: string; title?: string } | null> {
-  const fallback = (): { text: string; title?: string } => {
-    const rendered = htmlToMarkdown(params.html);
-    if (params.extractMode === "text") {
-      const text = markdownToText(rendered.text) || normalizeWhitespace(stripTags(params.html));
-      return { text, title: rendered.title };
-    }
-    return rendered;
-  };
-  try {
-    const [{ Readability }, { parseHTML }] = await Promise.all([
-      import("@mozilla/readability"),
-      import("linkedom"),
-    ]);
-    const { document } = parseHTML(params.html);
-    try {
-      (document as { baseURI?: string }).baseURI = params.url;
-    } catch {
-      // Best-effort base URI for relative links.
-    }
-    const reader = new Readability(document, { charThreshold: 0 });
-    const parsed = reader.parse();
-    if (!parsed?.content) {
-      return fallback();
-    }
-    const title = parsed.title || undefined;
-    if (params.extractMode === "text") {
-      const text = normalizeWhitespace(parsed.textContent ?? "");
-      return text ? { text, title } : fallback();
-    }
-    const rendered = htmlToMarkdown(parsed.content);
-    return { text: rendered.text, title: title ?? rendered.title };
-  } catch {
-    return fallback();
+  const cleanHtml = await sanitizeHtml(params.html);
+  const rendered = htmlToMarkdown(cleanHtml);
+  if (params.extractMode === "text") {
+    const text =
+      stripInvisibleUnicode(markdownToText(rendered.text)) ||
+      stripInvisibleUnicode(normalizeWhitespace(stripTags(cleanHtml)));
+    return text ? { text, title: rendered.title } : null;
   }
+  const text = stripInvisibleUnicode(rendered.text);
+  return text ? { text, title: rendered.title } : null;
 }

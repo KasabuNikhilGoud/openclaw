@@ -1,3 +1,4 @@
+// Googlechat type declarations define plugin contracts.
 export type GoogleChatSpace = {
   name?: string;
   displayName?: string;
@@ -11,12 +12,12 @@ export type GoogleChatUser = {
   type?: string;
 };
 
-export type GoogleChatThread = {
+type GoogleChatThread = {
   name?: string;
   threadKey?: string;
 };
 
-export type GoogleChatAttachmentDataRef = {
+type GoogleChatAttachmentDataRef = {
   resourceName?: string;
   attachmentUploadToken?: string;
 };
@@ -32,7 +33,7 @@ export type GoogleChatAttachment = {
   driveDataRef?: Record<string, unknown>;
 };
 
-export type GoogleChatUserMention = {
+type GoogleChatUserMention = {
   user?: GoogleChatUser;
   type?: string;
 };

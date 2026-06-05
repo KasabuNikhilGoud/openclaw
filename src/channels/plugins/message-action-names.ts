@@ -1,7 +1,11 @@
+/**
+ * Canonical message action names accepted by channel message tool dispatch.
+ */
 export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "send",
   "broadcast",
   "poll",
+  "poll-vote",
   "react",
   "reactions",
   "read",
@@ -42,13 +46,22 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "category-create",
   "category-edit",
   "category-delete",
+  "topic-create",
+  "topic-edit",
   "voice-status",
   "event-list",
   "event-create",
   "timeout",
   "kick",
   "ban",
+  "set-profile",
   "set-presence",
+  "set-profile",
+  "download-file",
+  "upload-file",
 ] as const;
 
+/**
+ * Message action name union derived from the canonical action list.
+ */
 export type ChannelMessageActionName = (typeof CHANNEL_MESSAGE_ACTION_NAMES)[number];

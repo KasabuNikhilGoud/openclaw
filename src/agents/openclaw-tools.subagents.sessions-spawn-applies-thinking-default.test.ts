@@ -1,74 +1,116 @@
-import { describe, expect, it, vi } from "vitest";
-import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+// Verifies sessions_spawn thinking defaults, overrides, and inheritance.
+import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual("../config/config.js");
-  return {
-    ...actual,
-    loadConfig: () => ({
-      agents: {
-        defaults: {
-          subagents: {
-            thinking: "high",
-          },
-        },
-      },
-      routing: {
-        sessions: {
-          mainKey: "agent:test:main",
-        },
-      },
-    }),
-  };
-});
+type ThinkingLevel = "high" | "medium" | "low" | "off";
 
-vi.mock("../gateway/call.js", () => {
-  return {
-    callGateway: vi.fn(async ({ method }: { method: string }) => {
-      if (method === "agent") {
-        return { runId: "run-123" };
-      }
-      return {};
-    }),
-  };
-});
+function expectResolvedThinkingPlan(input: {
+  expected: ThinkingLevel;
+  expectedOverride?: ThinkingLevel | null;
+  thinkingOverrideRaw?: string;
+  callerThinkingRaw?: string;
+  requesterAgentConfig?: unknown;
+  targetAgentConfig?: unknown;
+  cfg?: OpenClawConfig;
+}) {
+  // Assert both the effective override and initial session patch in one place.
+  const cfg =
+    input.cfg ??
+    ({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: { defaults: { subagents: { thinking: "high" } } },
+    } as OpenClawConfig);
 
-describe("sessions_spawn thinking defaults", () => {
-  it("applies agents.defaults.subagents.thinking when thinking is omitted", async () => {
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:test:main" });
-    const result = await tool.execute("call-1", { task: "hello" });
-    expect(result.details).toMatchObject({ status: "accepted" });
-
-    const { callGateway } = await import("../gateway/call.js");
-    const calls = (callGateway as unknown as ReturnType<typeof vi.fn>).mock.calls;
-
-    const agentCall = calls
-      .map((call) => call[0] as { method: string; params?: Record<string, unknown> })
-      .findLast((call) => call.method === "agent");
-    const thinkingPatch = calls
-      .map((call) => call[0] as { method: string; params?: Record<string, unknown> })
-      .findLast((call) => call.method === "sessions.patch" && call.params?.thinkingLevel);
-
-    expect(agentCall?.params?.thinking).toBe("high");
-    expect(thinkingPatch?.params?.thinkingLevel).toBe("high");
+  const plan = resolveSubagentThinkingOverride({
+    cfg,
+    requesterAgentConfig: input.requesterAgentConfig,
+    targetAgentConfig: input.targetAgentConfig,
+    thinkingOverrideRaw: input.thinkingOverrideRaw,
+    callerThinkingRaw: input.callerThinkingRaw,
   });
 
-  it("prefers explicit sessions_spawn.thinking over config default", async () => {
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:test:main" });
-    const result = await tool.execute("call-2", { task: "hello", thinking: "low" });
-    expect(result.details).toMatchObject({ status: "accepted" });
+  expect(plan).toEqual({
+    status: "ok",
+    thinkingOverride:
+      input.expectedOverride === null ? undefined : (input.expectedOverride ?? input.expected),
+    initialSessionPatch: { thinkingLevel: input.expected },
+  });
+}
 
-    const { callGateway } = await import("../gateway/call.js");
-    const calls = (callGateway as unknown as ReturnType<typeof vi.fn>).mock.calls;
+describe("sessions_spawn thinking defaults", () => {
+  it("applies agents.defaults.subagents.thinking when thinking is omitted", () => {
+    expectResolvedThinkingPlan({
+      expected: "high",
+    });
+  });
 
-    const agentCall = calls
-      .map((call) => call[0] as { method: string; params?: Record<string, unknown> })
-      .findLast((call) => call.method === "agent");
-    const thinkingPatch = calls
-      .map((call) => call[0] as { method: string; params?: Record<string, unknown> })
-      .findLast((call) => call.method === "sessions.patch" && call.params?.thinkingLevel);
+  it("prefers explicit sessions_spawn.thinking over config default", () => {
+    expectResolvedThinkingPlan({
+      thinkingOverrideRaw: "low",
+      expected: "low",
+    });
+  });
 
-    expect(agentCall?.params?.thinking).toBe("low");
-    expect(thinkingPatch?.params?.thinkingLevel).toBe("low");
+  it("prefers per-agent subagent thinking over global subagent thinking", () => {
+    expectResolvedThinkingPlan({
+      targetAgentConfig: { subagents: { thinking: "medium" } },
+      expected: "medium",
+    });
+  });
+
+  it("prefers requester-agent subagent thinking over target-agent subagent thinking", () => {
+    expectResolvedThinkingPlan({
+      requesterAgentConfig: { subagents: { thinking: "low" } },
+      targetAgentConfig: { subagents: { thinking: "medium" } },
+      callerThinkingRaw: "high",
+      expected: "low",
+    });
+  });
+
+  it("inherits caller thinking when no explicit or configured subagent thinking exists", () => {
+    expectResolvedThinkingPlan({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { defaults: {} },
+      } as OpenClawConfig,
+      callerThinkingRaw: "medium",
+      expected: "medium",
+      expectedOverride: null,
+    });
+  });
+
+  it("prefers global subagent thinking over caller thinking", () => {
+    expectResolvedThinkingPlan({
+      callerThinkingRaw: "medium",
+      expected: "high",
+    });
+  });
+
+  it("preserves caller thinking off when inherited", () => {
+    expectResolvedThinkingPlan({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { defaults: {} },
+      } as OpenClawConfig,
+      callerThinkingRaw: "off",
+      expected: "off",
+      expectedOverride: null,
+    });
+  });
+
+  it("preserves explicit thinking off", () => {
+    expectResolvedThinkingPlan({
+      thinkingOverrideRaw: "off",
+      expected: "off",
+    });
+  });
+
+  it("preserves configured subagent thinking off", () => {
+    expectResolvedThinkingPlan({
+      targetAgentConfig: { subagents: { thinking: "off" } },
+      callerThinkingRaw: "high",
+      expected: "off",
+    });
   });
 });
